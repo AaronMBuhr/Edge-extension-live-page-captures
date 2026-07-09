@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LinkedIn Job Scraper</title>
+    <style>
+        body {
+            font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+            width: 280px;
+            margin: 0;
+            padding: 12px;
+            background: #f3f2ef;
+            color: #1d1d1d;
+        }
+        h1 {
+            font-size: 13px;
+            margin: 0 0 10px 0;
+            color: #0a66c2;
+        }
+        button {
+            display: block;
+            width: 100%;
+            padding: 9px 10px;
+            margin-bottom: 8px;
+            border: none;
+            border-radius: 18px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        #scrapeButton {
+            background: #0a66c2;
+            color: #fff;
+        }
+        #scrapeButton:hover { background: #004182; }
+        #clearButton {
+            background: #fff;
+            color: #0a66c2;
+            border: 1px solid #0a66c2;
+        }
+        #clearButton:hover { background: #ebf3fb; }
+        .buffer {
+            font-size: 12px;
+            font-weight: 600;
+            margin: 2px 0 8px 0;
+        }
+        .status {
+            font-size: 11px;
+            color: #555;
+            min-height: 28px;
+            line-height: 1.3;
+            white-space: pre-wrap;
+        }
+        .hint {
+            font-size: 10px;
+            color: #777;
+            margin-top: 6px;
+            line-height: 1.4;
+        }
+        .ok { color: #057642; }
+        .err { color: #b24020; }
+    </style>
+</head>
+<body>
+    <h1>LinkedIn Job Scraper</h1>
+    <div class="buffer" id="bufferCount">Buffer: 0 jobs</div>
+    <button id="scrapeButton">Scrape This Job (append)</button>
+    <button id="clearButton">Clear Buffer</button>
+    <div class="status" id="status"></div>
+    <div class="hint">
+        <strong>Click</strong> the scrape button to append this job and copy the whole batch.<br>
+        <strong>Shift-click</strong> to clear the old batch, then scrape this job as job 1.
+    </div>
+    <div class="hint" style="margin-top:6px;">
+        Hotkeys: <strong>Alt+Shift+J</strong> = append · <strong>Alt+Shift+R</strong> = reset &amp; scrape.<br>
+        <strong>Click Clear Buffer</strong> to throw away the current batch.<br>
+        <strong>Shift-click Clear Buffer</strong> to clear the clipboard, then copy diagnostics.
+    </div>
+    <div class="hint" id="buildNum" style="margin-top:8px;color:#999;"></div>
+    <script src="popup.js"></script>
+</body>
+</html>
