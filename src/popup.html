@@ -34,6 +34,11 @@
             color: #fff;
         }
         #scrapeButton:hover { background: #004182; }
+        #saveListButton {
+            background: #057642;
+            color: #fff;
+        }
+        #saveListButton:hover { background: #04562f; }
         #clearButton {
             background: #fff;
             color: #0a66c2;
@@ -65,16 +70,18 @@
 <body>
     <h1>LinkedIn Job Scraper</h1>
     <div class="buffer" id="bufferCount">Buffer: 0 jobs</div>
-    <button id="scrapeButton">Scrape This Job (append)</button>
+    <button id="scrapeButton">Copy Current Job to Clipboard</button>
+    <button id="saveListButton">Save Job List (Markdown)</button>
     <button id="clearButton">Clear Buffer</button>
     <div class="status" id="status"></div>
     <div class="hint">
-        <strong>Click</strong> the scrape button to append this job and copy the whole batch.<br>
-        <strong>Shift-click</strong> to clear the old batch, then scrape this job as job 1.
+        <strong>Copy Current Job</strong> appends the open job to the buffer and copies the whole batch to the clipboard.<br>
+        <strong>Shift-click</strong> it to clear the old batch first, then copy just this job.<br>
+        <strong>Save Job List</strong> clicks every job in the left list and saves them all to a dated markdown file in your Downloads.
     </div>
     <div class="hint" style="margin-top:6px;">
-        Hotkeys: <strong>Alt+Shift+J</strong> = append · <strong>Alt+Shift+R</strong> = reset &amp; scrape.<br>
-        <strong>Click Clear Buffer</strong> to throw away the current batch.<br>
+        Hotkey: <strong>Alt+Shift+J</strong> = save the whole job list to a markdown file.<br>
+        <strong>Click Clear Buffer</strong> to throw away the current clipboard batch.<br>
         <strong>Shift-click Clear Buffer</strong> to clear the clipboard, then copy diagnostics.
     </div>
     <div class="hint" id="buildNum" style="margin-top:8px;color:#999;"></div>

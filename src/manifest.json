@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Job Scraper",
-  "version": "1.0.10",
+  "version": "1.0.15",
   "description": "Reads the full job posting from a LinkedIn job page, including company from the job header, and copies a labeled, AI-ready block to the clipboard. Shift-click Clear Buffer copies diagnostics.",
   "icons": {
     "48": "icons/icon-48x48.png",
@@ -11,7 +11,8 @@
     "activeTab",
     "scripting",
     "storage",
-    "clipboardWrite"
+    "clipboardWrite",
+    "downloads"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*"
@@ -25,21 +26,13 @@
     "service_worker": "background.js"
   },
   "commands": {
-    "scrape-append": {
+    "save-list": {
       "suggested_key": {
         "default": "Alt+Shift+J",
         "windows": "Alt+Shift+J",
         "mac": "Alt+Shift+J"
       },
-      "description": "Scrape this job and append to the buffer"
-    },
-    "scrape-reset": {
-      "suggested_key": {
-        "default": "Alt+Shift+R",
-        "windows": "Alt+Shift+R",
-        "mac": "Alt+Shift+R"
-      },
-      "description": "Clear the buffer, then scrape this job as job 1"
+      "description": "Scrape every job in the list on this page and save them to a markdown file"
     }
   },
   "content_scripts": [

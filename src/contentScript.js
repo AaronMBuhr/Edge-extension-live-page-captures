@@ -19,7 +19,168 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
             });
         return true;
     }
+    if (request.action === 'listJobs') {
+        try {
+            sendResponse({ ok: true, jobs: listJobCards() });
+        } catch (error) {
+            console.error("LinkedIn Job Scraper: error in listJobs:", error);
+            sendResponse({ ok: false, error: String(error) });
+        }
+        return false; // synchronous
+    }
+    if (request.action === 'clickAndScrapeJob') {
+        clickAndScrapeJob(request.jobId)
+            .then(result => sendResponse(result))
+            .catch(error => {
+                console.error("LinkedIn Job Scraper: error in clickAndScrapeJob:", error);
+                sendResponse({ ok: false, error: String(error) });
+            });
+        return true;
+    }
 });
+
+// ---------------------------------------------------------------------------
+// Batch mode: enumerate the left-hand result list and scrape one job by
+// clicking its card. The background service worker drives the loop with one
+// short message per job so the MV3 worker never sits idle long enough to die.
+//
+// Anchors (verified against captured DOMs of the 2026 SDUI jobs view):
+//  - each card:   div[role="button"][componentkey="job-card-component-ref-<id>"]
+//  - detail sync: an element with componentkey="JobDetails_AboutTheJob_<id>"
+//    appears once the right panel is actually showing job <id>.
+// ---------------------------------------------------------------------------
+function findJobCards() {
+    // The componentkey appears on a nested div too; keep only the clickable
+    // role="button" wrapper, deduped by job id in DOM (list) order.
+    const nodes = document.querySelectorAll(
+        'div[role="button"][componentkey^="job-card-component-ref-"]');
+    const byId = new Map();
+    for (const node of nodes) {
+        const id = (node.getAttribute('componentkey') || '')
+            .replace('job-card-component-ref-', '');
+        if (/^\d+$/.test(id) && !byId.has(id)) byId.set(id, node);
+    }
+    // Classic (pre-SDUI) UI fallback: <li data-occludable-job-id="<id>">.
+    if (byId.size === 0) {
+        for (const li of document.querySelectorAll('[data-occludable-job-id]')) {
+            const id = li.getAttribute('data-occludable-job-id') || '';
+            if (/^\d+$/.test(id) && !byId.has(id)) byId.set(id, li);
+        }
+    }
+    return byId;
+}
+
+function listJobCards() {
+    const jobs = [];
+    for (const [id, card] of findJobCards()) {
+        const t = cleanText(card.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+        jobs.push({ id: id, title: t[0] || null });
+    }
+    return jobs;
+}
+
+function detailPanelShows(jobId) {
+    return !!document.querySelector(
+        '[componentkey="JobDetails_AboutTheJob_' + jobId + '"]');
+}
+
+async function clickAndScrapeJob(jobId) {
+    const card = findJobCards().get(String(jobId));
+    if (!card) {
+        return { ok: false, error: 'Job card ' + jobId + ' no longer found in the list.' };
+    }
+
+    if (!detailPanelShows(jobId)) {
+        card.scrollIntoView({ block: 'center' });
+        await sleep(150); // let the scroll settle so elementFromPoint hits the card
+
+        const started = Date.now();
+        clickLikeAUser(card);
+        let ready = await waitForDetailPanel(jobId, 4000);
+        if (!ready) {
+            // Retry: role="button" elements also activate on Enter, and a
+            // keyboard path sidesteps any pointer-specific handling.
+            pressEnterOn(card);
+            ready = await waitForDetailPanel(jobId, 4000);
+        }
+        if (!ready) {
+            return {
+                ok: false,
+                error: 'Detail panel never showed job ' + jobId + ' after click + Enter retry (' +
+                    (Date.now() - started) + 'ms) — the page may be ignoring synthetic clicks.'
+            };
+        }
+        await sleep(300); // the About section just mounted; let its text settle
+    }
+
+    // Reuse the single-job pipeline; the canonical URL comes from the card's
+    // job id because clicking a card doesn't reliably update the tab URL.
+    await expandSeeMore();
+    const parsed = parseCurrentJob('https://www.linkedin.com/jobs/view/' + jobId + '/');
+
+    const heading = findHeadingByText(['about the job', 'job description', 'about this job']);
+    const titleOk = parsed.title && !looksLikeNavChrome(parsed.title);
+    const hasRealContent = !!heading || (parsed.description && parsed.description.length >= 40);
+    if (!titleOk || !hasRealContent) {
+        return { ok: false, error: 'Job ' + jobId + ' loaded but could not be parsed.' };
+    }
+    return { ok: true, text: parsed.formattedText, md: parsed.markdown, title: parsed.title };
+}
+
+// Wait until the right panel is showing this specific job. On the SDUI view
+// the componentkey marker is exact. The classic view has no per-job marker,
+// so there accept the URL pointing at this job plus the generic readiness
+// check — but only when no SDUI marker exists at all, otherwise a stale
+// marker from the previous job would let us scrape the wrong panel.
+async function waitForDetailPanel(jobId, timeoutMs) {
+    const deadline = Date.now() + (timeoutMs || 8000);
+    while (Date.now() < deadline) {
+        if (detailPanelShows(jobId)) return true;
+        if (!document.querySelector('[componentkey^="JobDetails_AboutTheJob_"]') &&
+            location.href.indexOf('currentJobId=' + jobId) !== -1 && isJobReady()) {
+            return true;
+        }
+        await sleep(200);
+    }
+    return detailPanelShows(jobId);
+}
+
+// SDUI cards are div[role=button] rendered by React. React may bind the
+// handler on a DESCENDANT of the card wrapper, and a bubbling event dispatched
+// on the wrapper never reaches handlers below it — so aim at the topmost
+// element a real pointer would hit (elementFromPoint at the card's center) and
+// let the sequence bubble up through every layer.
+function clickLikeAUser(el) {
+    const rect = el.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let target = document.elementFromPoint(cx, cy);
+    if (!target || !el.contains(target)) target = el;
+
+    const opts = {
+        bubbles: true, cancelable: true, composed: true, view: window,
+        detail: 1, button: 0, buttons: 1, clientX: cx, clientY: cy
+    };
+    const up = Object.assign({}, opts, { buttons: 0 });
+    try { target.dispatchEvent(new PointerEvent('pointerover', opts)); } catch (e) { /* ignore */ }
+    try { target.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (e) { /* ignore */ }
+    target.dispatchEvent(new MouseEvent('mousedown', opts));
+    try { el.focus(); } catch (e) { /* ignore */ }
+    try { target.dispatchEvent(new PointerEvent('pointerup', up)); } catch (e) { /* ignore */ }
+    target.dispatchEvent(new MouseEvent('mouseup', up));
+    target.dispatchEvent(new MouseEvent('click', up));
+}
+
+// Keyboard activation fallback for role="button" cards.
+function pressEnterOn(el) {
+    try { el.focus(); } catch (e) { /* ignore */ }
+    const opts = {
+        bubbles: true, cancelable: true, composed: true,
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13
+    };
+    el.dispatchEvent(new KeyboardEvent('keydown', opts));
+    el.dispatchEvent(new KeyboardEvent('keyup', opts));
+}
 
 // ---------------------------------------------------------------------------
 // Main scrape routine.
@@ -69,13 +230,16 @@ async function waitForJobReady(timeoutMs) {
     return isJobReady();
 }
 
+// The SDUI search view has no title <h1> at all, so the title may come from
+// document.title instead (parseTitleCompany prefers a real <h1> when present).
+// Requiring the description body to have rendered too keeps a half-loaded
+// panel from counting as ready.
 function isJobReady() {
     const heading = findHeadingByText(['about the job', 'job description', 'about this job']);
     if (!heading) return false;
-    const h1 = pickTitleH1();
-    if (!h1) return false;
-    const t = cleanText(h1.innerText || h1.textContent || '');
-    return !!t && !looksLikeNavChrome(t);
+    const t = parseTitleCompany().title;
+    if (!t || looksLikeNavChrome(t)) return false;
+    return !!findDescriptionNode(getJobPanel());
 }
 
 async function diagnoseJob(pageUrl) {
@@ -104,16 +268,17 @@ function parseCurrentJob(pageUrl) {
     const workplace   = findWorkplace(headerText);
     const employment  = findEmployment(headerText);
     const seniority   = findSeniority(panel);
-    const salary      = findSalary(headerText, panel);
+    const salary      = findSalary(headerText, extractJobId(pageUrl));
     const canonicalUrl = buildCanonicalUrl(pageUrl);
 
-    const formattedText = formatBlock({
-        title, company, location, workplace, employment, seniority, salary, description, canonicalUrl
-    });
+    const fields = { title, company, location, workplace, employment, seniority, salary, description, canonicalUrl };
+    const formattedText = formatBlock(fields);
+    const markdown = formatMarkdown(fields);
 
     return {
         title, company, location, workplace, employment, seniority, salary,
-        description, canonicalUrl, formattedText, descNode, headerText, panelText: cleanText(panel.innerText || '')
+        description, canonicalUrl, formattedText, markdown, descNode, headerText,
+        panelText: cleanText(panel.innerText || '')
     };
 }
 
@@ -188,6 +353,8 @@ function findCompanyFromLinks(panel, title) {
 
         for (const a of links) {
             const href = a.getAttribute('href') || '';
+            // "Show Premium Insights" etc. link to /company/<x>/insights/ — UI, not a name.
+            if (/\/insights\b/i.test(href)) continue;
             const raw = cleanText(
                 (a.innerText || a.textContent || '') ||
                 a.getAttribute('aria-label') ||
@@ -218,9 +385,9 @@ function findCompanyFromHeader(headerText, title) {
     // looks like location / timing / applicant metadata.
     for (const line of lines.slice(0, 12)) {
         if (sameText(line, title)) continue;
-        if (!line.includes('·')) continue;
+        if (!/[·•]/.test(line)) continue;
 
-        const parts = line.split('·').map(p => cleanupCompanyText(p)).filter(Boolean);
+        const parts = line.split(/[·•]/).map(p => cleanupCompanyText(p)).filter(Boolean);
         if (!parts.length) continue;
 
         const first = parts[0];
@@ -263,6 +430,7 @@ function isPlausibleCompanyName(text, title) {
     if (/^(Remote|Hybrid|On-?site|Full-?time|Part-?time|Contract|Temporary|Internship|Freelance)$/i.test(text)) return false;
     if (/^(Entry level|Associate|Mid-Senior level|Director|Executive|Not Applicable)$/i.test(text)) return false;
     if (/\b(applicants?|people clicked apply|reposted|posted|promoted)\b/i.test(text)) return false;
+    if (/^(Show|See|View)\b/i.test(text)) return false; // "Show Premium Insights", "Show more"
     if (looksLikeLocationLine(text)) return false;
     return true;
 }
@@ -277,7 +445,15 @@ function looksLikeHeaderChrome(text) {
         /^(Remote|Hybrid|On-?site|Full-?time|Part-?time|Contract|Temporary|Internship|Freelance)$/i.test(text);
 }
 
+// "Coalition, Inc." / "Acme, LLC" have the same "Word, Word" shape as
+// "City, State"; a corporate suffix after the comma means it's a company.
+// Deliberately no 2-letter suffixes (Co, NV, PA...) — they collide with states.
+function hasCorporateSuffix(text) {
+    return /,\s*(Inc|LLC|Ltd|Limited|Corp|Corporation|Company|LLP|PLC|PLLC|GmbH|Pty)\b\.?/i.test(text || '');
+}
+
 function looksLikeLocationLine(text) {
+    if (hasCorporateSuffix(text)) return false;
     return /^([A-Z][A-Za-z .'-]+,\s*[A-Z]{2})(?:\b|\s*[·(])/i.test(text) ||
         /^([A-Z][A-Za-z .'-]+,\s*[A-Z][A-Za-z .'-]+)(?:\b|\s*[·(])/i.test(text);
 }
@@ -353,6 +529,22 @@ function looksLikeChrome(text) {
 // the left-hand results list.
 // ---------------------------------------------------------------------------
 function getJobPanel() {
+    // SDUI search view: there is no title <h1>, and walking up from the
+    // description eventually swallows the left-hand result list. Take the
+    // largest ancestor of the "About the job" heading that still contains no
+    // job card — that is the right-hand detail pane (top card + description).
+    const cardSel = '[componentkey^="job-card-component-ref-"], [data-occludable-job-id]';
+    const descHeading = findHeadingByText(['about the job', 'job description', 'about this job']);
+    if (descHeading && document.querySelector(cardSel)) {
+        let best = null;
+        let node = descHeading.parentElement;
+        while (node && node !== document.body && !node.querySelector(cardSel)) {
+            best = node;
+            node = node.parentElement;
+        }
+        if (best) return best;
+    }
+
     const h1 = pickTitleH1();
     if (!h1) return document.body;
     // Walk up until the ancestor's text also contains "About the job" (i.e. it
@@ -423,11 +615,22 @@ function getPanelHeaderText(panel) {
 function findLocation(headerText) {
     const lines = headerText.split('\n').map(l => l.trim()).filter(Boolean);
     for (const line of lines.slice(0, 10)) {
+        if (hasCorporateSuffix(line)) continue; // "Coalition, Inc. • United States (Remote)"
         // e.g. "Jacksonville, FL · 1 week ago · 11 people clicked apply"
         const m = line.match(/^([A-Z][A-Za-z .'-]+,\s*[A-Z]{2})\b(?:\s*\([^)]+\))?/);
         if (m) return m[1].trim();
         const m2 = line.match(/^([A-Z][A-Za-z .'-]+,\s*[A-Z][A-Za-z .'-]+?)(?:\s*·|\s*\()/);
         if (m2) return m2[1].trim();
+    }
+    // Non-"City, ST" locations ("United States", "Greater Boston") are only
+    // trusted on the top-card metadata line: "<location> · Reposted 6 days ago · …".
+    for (const line of lines.slice(0, 15)) {
+        const parts = line.split('·').map(p => p.trim()).filter(Boolean);
+        if (parts.length < 2) continue;
+        if (!/\b(posted|reposted|ago|applicants?|clicked apply)\b/i.test(parts.slice(1).join(' '))) continue;
+        const loc = parts[0].replace(/\s*\([^)]*\)\s*$/, '').trim();
+        if (loc && loc.length <= 60 && !/\d/.test(loc) &&
+            !/\b(posted|reposted|ago|applicants?)\b/i.test(loc)) return loc;
     }
     return null;
 }
@@ -452,11 +655,18 @@ function findSeniority(panel) {
     return m ? m[1] : null;
 }
 
-function findSalary(headerText, panel) {
-    // Prefer the header (LinkedIn shows comp insights near the top); fall back
-    // to the panel body. Avoid grabbing stray dollar figures from the JD prose.
-    const scope = headerText + '\n' + cleanText(panel.innerText || '').slice(0, 1500);
-    const m = scope.match(/\$[\d,]+(?:\.\d+)?\s*K?(?:\s*[-–]\s*\$[\d,]+(?:\.\d+)?\s*K?)?(?:\s*\/\s*\w+|\s*per\s+\w+|\s*\w+ly)?/i);
+function findSalary(headerText, jobId) {
+    // Prefer the detail header; on the SDUI search view the pay range is only
+    // shown on this job's own card in the left-hand list. Never scan the JD
+    // prose (stray dollar figures) or other cards (another job's pay).
+    const card = jobId ? findJobCards().get(String(jobId)) : null;
+    const cardText = card ? cleanText(card.innerText || card.textContent || '') : '';
+    const scope = headerText + '\n' + cardText;
+    // One amount: "$209.5K/yr", "$180,000", "$45/hr". A range repeats it after
+    // a dash ("$209.5K/yr - $246.5K/yr", "$180,000—$220,000 USD").
+    const amount = String.raw`\$[\d,]+(?:\.\d+)?\s*[KM]?(?:\s*\/\s*[A-Za-z]+)?`;
+    const re = new RegExp(amount + String.raw`(?:\s*[-–—]\s*` + amount + String.raw`)?(?:\s*USD|\s*per\s+[A-Za-z]+)?`, 'i');
+    const m = scope.match(re);
     return m ? m[0].replace(/\s+/g, ' ').trim() : null;
 }
 
@@ -549,6 +759,31 @@ function formatBlock(d) {
     return block;
 }
 
+// Markdown rendering of one job — a "## Title — Company" section, a labeled
+// bullet list of the metadata, then the full description under "### Description".
+// Used by the "Save Job List" flow; the background worker stitches sections
+// together into one dated document.
+function formatMarkdown(d) {
+    const lines = [];
+    const heading = d.title || 'Untitled role';
+    lines.push('## ' + (d.company ? heading + ' — ' + d.company : heading));
+    lines.push('');
+    if (d.company)      lines.push('- **Company:** ' + d.company);
+    if (d.location)     lines.push('- **Location:** ' + d.location);
+    if (d.workplace)    lines.push('- **Workplace:** ' + d.workplace);
+    if (d.employment)   lines.push('- **Employment type:** ' + d.employment);
+    if (d.seniority)    lines.push('- **Seniority:** ' + d.seniority);
+    if (d.salary)       lines.push('- **Compensation:** ' + d.salary);
+    if (d.canonicalUrl) lines.push('- **URL:** ' + d.canonicalUrl);
+    if (d.description) {
+        lines.push('');
+        lines.push('### Description');
+        lines.push('');
+        lines.push(d.description);
+    }
+    return lines.join('\n');
+}
+
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -569,7 +804,7 @@ function buildDiagnostics(pageUrl, parsed, descNode) {
     };
 
     lines.push('===== LINKEDIN JOB SCRAPER — DIAGNOSTIC REPORT =====');
-    lines.push('Build: 11');
+    lines.push('Build: 12');
     lines.push('Generated: ' + new Date().toISOString());
     lines.push('');
     lines.push('--- PAGE ---');

@@ -1,0 +1,11 @@
+{
+  "name": "linkedin-job-scraper",
+  "private": true,
+  "description": "Dev tooling only — the extension itself (src/) has no build step or runtime dependencies.",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.3"
+  }
+}

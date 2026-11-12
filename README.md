@@ -17,15 +17,24 @@ Open a LinkedIn job — either a standalone posting (`/jobs/view/...`) or a job
 selected in the search results panel (`/jobs/search/?currentJobId=...`). Click
 the toolbar icon, then:
 
-- **Click "Scrape This Job (append)"** — expands the "see more" description,
-  scrapes the job, *adds* it to the buffer, and copies the whole buffer to the
-  clipboard. The popup shows how many jobs are buffered.
-- **Shift-click the scrape button** — clears the buffer first, then scrapes the
+- **Click "Copy Current Job to Clipboard"** — expands the "see more"
+  description, scrapes the open job, *adds* it to the buffer, and copies the
+  whole buffer to the clipboard. The popup shows how many jobs are buffered.
+- **Shift-click that button** — clears the buffer first, then scrapes the
   current job fresh (buffer = just this one job).
-- **"Copy & Clear Buffer"** — re-copies everything in the buffer and empties it,
-  for when you've just pasted and want a clean slate without scraping a new job.
+- **Click "Save Job List (Markdown)"** (or press **Alt+Shift+J**) — on a
+  search-results page, clicks each job card in the left-hand list in turn,
+  waits for the right-hand detail panel to load that job, scrapes it, and
+  collects each as a markdown section. When done it saves all of them to a
+  dated file, `linkedin-jobs-YYYYMMDD.md`, in your Downloads folder. Progress
+  shows as toasts on the page; jobs that fail to load are skipped and counted
+  in the final toast (details in the extension's service-worker console). This
+  path is independent of the clipboard buffer and does not disturb it.
+- **"Clear Buffer"** — empties the clipboard buffer for a clean slate.
+  Shift-click it to clear the clipboard and copy a diagnostic report instead.
 
-Multiple jobs are separated by a `======` divider line when pasted.
+Clipboard batches separate jobs with a `======` divider; the saved markdown
+file separates them with `---` rules under `##` job headings.
 
 ## Output format
 
@@ -67,3 +76,13 @@ changes.
 - `src/contentScript.js` — scraping logic (JSON-LD + DOM fallbacks)
 - `src/popup.html` / `src/popup.js` — UI, buffer management, clipboard
 - `src/icons/` — toolbar icons
+- `tests/captures.test.js` — regression tests against saved page captures
+
+## Tests
+
+`npm install` once, then `npm test`. The tests run `src/contentScript.js`
+under jsdom against saved LinkedIn DOM captures
+(`www.linkedin.com_*.dom.html` in the repo root) and check the parsed
+title / company / location / salary / description. A capture that is missing
+is skipped. When LinkedIn changes its markup, save a fresh capture, add it to
+the `CAPTURES` list, and fix until it passes.

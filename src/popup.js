@@ -2,7 +2,7 @@
 // clipboard / scrape logic. This guarantees the buttons and the hotkeys behave
 // identically.
 const BUFFER_KEY = 'jobBuffer';
-const BUILD = 11;                     // increment on every change
+const BUILD = 14;                     // increment on every change
 
 const statusEl = document.getElementById('status');
 const bufferCountEl = document.getElementById('bufferCount');
@@ -15,6 +15,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
 document.getElementById('scrapeButton').addEventListener('click', (event) => {
     handleScrape(event.shiftKey ? 'reset' : 'append');
+});
+
+document.getElementById('saveListButton').addEventListener('click', () => {
+    handleSaveJobList();
 });
 
 document.getElementById('clearButton').addEventListener('click', (event) => {
@@ -81,6 +85,24 @@ function handleScrape(mode) {
             'Added job ' + res.count + '. Clipboard now has ' + res.count +
             ' job' + (res.count === 1 ? '' : 's') + '.', 'ok');
         refreshBufferCount();
+    });
+}
+
+function handleSaveJobList() {
+    setStatus('Capturing every job on this page to markdown…');
+    chrome.runtime.sendMessage({ action: 'saveJobList' }, (res) => {
+        if (chrome.runtime.lastError) {
+            setStatus('Error: ' + chrome.runtime.lastError.message, 'err');
+            return;
+        }
+        if (!res || !res.ok) {
+            setStatus((res && res.error) || 'Could not start the list capture.', 'err');
+            return;
+        }
+        // The capture runs in the background; progress shows as page toasts and
+        // the finished file downloads automatically.
+        setStatus('Capturing the job list — watch the toasts on the page. ' +
+            'A markdown file downloads when it finishes.', 'ok');
     });
 }
 
